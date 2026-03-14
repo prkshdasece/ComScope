@@ -1,9 +1,11 @@
-build:
-	arm-linux-gnueabi-as -o Listports.o src/Listports.S
-	arm-linux-gnueabi-ld -o Listports Listports.o
+CC      = gcc
+CFLAGS  = -Wall -Wextra -std=c11 -g $(shell pkg-config --cflags ncurses)
+LIBS    = $(shell pkg-config --libs ncurses)
+SRCS    = src/core/main.c
+TARGET  = comscope
 
-run:
-	qemu-arm ./Listports
-
+all: $(TARGET)
+$(TARGET): $(SRCS)
+	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
 clean:
-	rm -f Listports.o Listports
+	rm -f $(TARGET)

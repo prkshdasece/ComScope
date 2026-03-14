@@ -1,2 +1,2 @@
 # ComScope
-Com port viewr for embedded develpment boards for linux
+Com port viewer for embedded develpment boards for linux

@@ -1,8 +1,8 @@
 CC      = gcc
-CFLAGS  = -Wall -Wextra -std=c11 -g $(shell pkg-config --cflags ncurses)
+CFLAGS  = -Wall -Wextra -std=c11 -g -Iinclude $(shell pkg-config --cflags ncurses)
 LIBS    = $(shell pkg-config --libs ncurses)
-SRCS    = src/core/main.c
-TARGET  = comscope
+SRCS    = src/core/main.c src/core/scanner.c
+TARGET  = ComScope
 
 all: $(TARGET)
 $(TARGET): $(SRCS)

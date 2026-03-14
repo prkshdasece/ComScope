@@ -29,6 +29,7 @@
 *.dylib
 
 # Executables
+*ComScope
 *.exe
 *.out
 *.app

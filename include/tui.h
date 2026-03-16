@@ -17,5 +17,6 @@ void tui_scroll(int direction);
 void tui_update_status(TermConfig *cfg, int connected);
 void tui_resize(TermConfig *cfg, int connected);
 
-/* input */
+/* input - with proper non-blocking support */
 int tui_get_char(void);
+void tui_set_timeout(int timeout_ms);

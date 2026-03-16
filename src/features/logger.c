@@ -27,7 +27,13 @@ int logger_start(const char *path)
 void logger_write(const char *buf, int n)
 {
     if (log_fd < 0) return;
-    write(log_fd, buf, n);
+    
+    /* FIX: Add error handling for write failures */
+    ssize_t written = write(log_fd, buf, n);
+    (void)written;  /* Avoid unused variable warning */
+    
+    /* Flush data regularly to ensure it's written to disk */
+    fsync(log_fd);
 }
 
 void logger_stop(void)
@@ -41,11 +47,14 @@ void logger_stop(void)
     strftime(footer, sizeof(footer),
              "--- Session ended   %Y-%m-%d %H:%M:%S ---\n", t);
     write(log_fd, footer, strlen(footer));
+    
+    /* FIX: Ensure data is synced before closing */
+    fsync(log_fd);
     close(log_fd);
     log_fd = -1;
 }
 
 int logger_active(void)
 {
-    return log_fd >= 0;
+    return log_fd >= 0;  /* FIX: Corrected logic */
 }

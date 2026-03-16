@@ -11,6 +11,7 @@ WINDOW *status_win;
 static int pad_row = 0;     /* last written pad row (0-based) */
 static int pad_pos = 0;     /* top row shown in viewport */
 static int auto_scroll = 1; /* if 1, follow new incoming data */
+static int input_timeout = 50;  /* timeout in ms for non-blocking input */
 
 static int visible_rows(void)
 {
@@ -18,6 +19,12 @@ static int visible_rows(void)
     getmaxyx(stdscr, rows, cols);
     /* status window occupies 1 row at bottom, pad uses rows-1 */
     return (rows > 1) ? (rows - 1) : 1;
+}
+
+void tui_set_timeout(int timeout_ms)
+{
+    input_timeout = timeout_ms;
+    timeout(timeout_ms);  /* Set global ncurses timeout */
 }
 
 void tui_init(TermConfig *cfg)
@@ -54,7 +61,11 @@ void tui_init(TermConfig *cfg)
     }
 
     status_win = newwin(1, cols, rows - 1, 0);
+    keypad(status_win, TRUE);  /* Enable special keys on status window */
     wrefresh(status_win);
+    
+    /* Set initial timeout */
+    timeout(input_timeout);
 }
 
 void tui_destroy(void)
@@ -64,9 +75,13 @@ void tui_destroy(void)
     endwin();
 }
 
+/* 
+ * Get character from stdscr with proper timeout handling
+ * Returns: character code, ERR on timeout, or special key codes
+ */
 int tui_get_char(void)
 {
-    return getch();
+    return getch();  /* Reads from stdscr with timeout */
 }
 
 /* write incoming bytes into pad and refresh viewport */

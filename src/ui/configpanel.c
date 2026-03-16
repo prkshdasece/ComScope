@@ -5,22 +5,22 @@
 
 /*baud rate options*/
 static const char *baud_labels[] = {
-
     "9600",
     "19200",
     "38400",
     "57600",
     "115200",
-    "230400"};
+    "230400"
+};
 
 static const speed_t baud_values[] = {
-
     B9600,
     B19200,
     B38400,
     B57600,
     B115200,
-    B230400};
+    B230400
+};
 
 #define BAUD_COUNT 6
 
@@ -29,17 +29,19 @@ int show_config(TermConfig *cfg)
     int win_h = 16;
     int win_w = 44;
     int win_y = (LINES - win_h) / 2;
-    int win_x = (COLS - win_x) / 2;
+    int win_x = (COLS - win_w) / 2;  /* FIX: was (COLS - win_x) */
 
     WINDOW *win = newwin(win_h, win_w, win_y, win_x);
     keypad(win, TRUE);
+    /* Set non-blocking input with 500ms timeout */
+    wtimeout(win, 500);
 
-    int baud_sel = 4; /*defauld index - 115200*/
+    int baud_sel = 4; /*default index - 115200*/
     int data_sel = 0; /*0 = 8bit*/
     int par_sel = 0;  /*0=None*/
     int stop_sel = 0; /*0=1bit*/
 
-    /*curson is on row 0=baud, 1=data, 2=parity, 3=stop*/
+    /*cursor is on row 0=baud, 1=data, 2=parity, 3=stop*/
     int row = 0;
 
     while (1)
@@ -81,7 +83,10 @@ int show_config(TermConfig *cfg)
         mvwprintw(win, 13, 2, "Tab=next row  left/right=change  Enter=connect  q=back");
         wrefresh(win);
 
-        int ch = wgetch(win);
+        int ch = wgetch(win);  /* 500ms timeout prevents hang */
+
+        if (ch == ERR)  /* FIX: Handle timeout gracefully */
+            continue;
 
         if (ch == '\t')
         {

@@ -18,8 +18,10 @@ char *pick_port(void)
 
     WINDOW *win = newwin(win_h, win_w, win_y, win_x);
     keypad(win, TRUE); /*enable arrow key on this window*/
+    /* FIX: Set non-blocking input with 500ms timeout */
+    wtimeout(win, 500);
 
-    int selected = 0; /*cuurently highligted row*/
+    int selected = 0; /*currently highlighted row*/
 
     while (1)
     {
@@ -53,7 +55,11 @@ char *pick_port(void)
         wrefresh(win);
 
         /*handle keypresses*/
-        int ch = wgetch(win);
+        int ch = wgetch(win);  /* 500ms timeout prevents hang */
+
+        /* FIX: Handle timeout gracefully */
+        if (ch == ERR)
+            continue;
 
         if (ch == KEY_UP)
         {

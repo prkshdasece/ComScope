@@ -1,18 +1,21 @@
-#ifndef TUI_H
-#define TUI_H
+#pragma once
 
 #include <ncurses.h>
 #include "config.h"
 
+/* windows used across modules */
+extern WINDOW *pad_win;
 extern WINDOW *status_win;
 
+/* init / shutdown */
 void tui_init(TermConfig *cfg);
-void tui_update_status(TermConfig *cfg, int connected);
 void tui_destroy(void);
 
-/* Phase 4 additions for formatting and scrollback */
-void tui_write(const char *buf, int n);
+/* screen updates */
+void tui_write(const char *buf, int len);
 void tui_scroll(int direction);
-int  tui_get_char(void);
+void tui_update_status(TermConfig *cfg, int connected);
+void tui_resize(TermConfig *cfg, int connected);
 
-#endif
+/* input */
+int tui_get_char(void);

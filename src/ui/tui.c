@@ -1,117 +1,162 @@
 #include <ncurses.h>
-#include <stdio.h>
+#include <string.h>
 #include "tui.h"
-#include "config.h"
 
-#define SCROLLBACK_LINES 10000
+#define PAD_ROWS 20000
+#define PAD_COLS 1024
 
-static WINDOW *output_pad = NULL;
-WINDOW *status_win = NULL;
+WINDOW *pad_win;
+WINDOW *status_win;
 
-static int current_pad_y = 0;
-static int scroll_offset = 0;
+static int pad_row = 0;     /* last written pad row (0-based) */
+static int pad_pos = 0;     /* top row shown in viewport */
+static int auto_scroll = 1; /* if 1, follow new incoming data */
 
-static void draw_pad(void)
+static int visible_rows(void)
 {
-    int view_h = LINES - 1;
-    int max_visible_y = current_pad_y;
-    
-    int top_y = max_visible_y - view_h + 1 - scroll_offset;
-    if (top_y < 0) top_y = 0;
-
-    int pad_cols = getmaxx(output_pad);
-    int draw_cols = COLS - 1;
-    if (draw_cols >= pad_cols) draw_cols = pad_cols - 1;
-
-    prefresh(output_pad, top_y, 0, 0, 0, view_h - 1, draw_cols);
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+    /* status window occupies 1 row at bottom, pad uses rows-1 */
+    return (rows > 1) ? (rows - 1) : 1;
 }
 
 void tui_init(TermConfig *cfg)
 {
-    output_pad = newpad(SCROLLBACK_LINES, COLS);
-    scrollok(output_pad, TRUE);
-    idlok(output_pad, TRUE);
+    (void)cfg;
 
-    status_win = newwin(1, COLS, LINES - 1, 0);
-    keypad(status_win, TRUE);
+    initscr();
+    raw();
+    noecho();
+    keypad(stdscr, TRUE);
+    curs_set(0);
 
-    tui_update_status(cfg, 0);
-}
+    if (has_colors())
+        start_color();
 
-void tui_update_status(TermConfig *cfg, int connected)
-{
-    werase(status_win);
-    wattron(status_win, A_REVERSE);
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
 
-    /* FIX: Draw up to COLS - 1. Never touch the bottom-right corner! */
-    for (int i = 0; i < COLS - 1; i++) waddch(status_win, ' ');
+    pad_win = newpad(PAD_ROWS, PAD_COLS);
+    scrollok(pad_win, TRUE);
 
-    mvwprintw(status_win, 0, 1, "%s  |  %d baud  |  %s%s  |  Ctrl+A = menu",
-        cfg->port,
-        (int)cfg->baud,
-        connected ? "[CONNECTED]" : "[DISCONNECTED]",
-        cfg->log_enabled ? "  |  [LOG]" : ""
-    );
-
-    wattroff(status_win, A_REVERSE);
+    status_win = newwin(1, cols, rows - 1, 0);
     wrefresh(status_win);
-    
-    touchwin(output_pad);
-    draw_pad(); 
-}
-
-void tui_write(const char *buf, int n)
-{
-    for (int i = 0; i < n; i++) {
-        char c = buf[i];
-        
-        if (c == '\r') {
-            /* Just snap cursor to the left edge, don't drop a line */
-            int y, x;
-            getyx(output_pad, y, x);
-            wmove(output_pad, y, 0);
-        } else if (c == '\n') {
-            /* Standard newline */
-            waddch(output_pad, '\n');
-        } else {
-            /* Normal character */
-            waddch(output_pad, (unsigned char)c);
-        }
-    }
-    
-    int x;
-    getyx(output_pad, current_pad_y, x);
-
-    scroll_offset = 0; 
-    draw_pad();
-}
-
-void tui_scroll(int direction)
-{
-    int view_h = LINES - 1;
-    int max_scroll = current_pad_y - view_h + 1;
-    if (max_scroll < 0) max_scroll = 0;
-
-    if (direction > 0) {
-        scroll_offset += (view_h / 2);
-    } else {
-        scroll_offset -= (view_h / 2);
-    }
-
-    if (scroll_offset > max_scroll) scroll_offset = max_scroll;
-    if (scroll_offset < 0) scroll_offset = 0;
-
-    touchwin(output_pad);
-    draw_pad();
-}
-
-int tui_get_char(void)
-{
-    return wgetch(status_win);
 }
 
 void tui_destroy(void)
 {
-    if (output_pad) { delwin(output_pad); output_pad = NULL; }
-    if (status_win) { delwin(status_win); status_win = NULL; }
+    if (status_win) delwin(status_win);
+    if (pad_win) delwin(pad_win);
+    endwin();
+}
+
+int tui_get_char(void)
+{
+    return getch();
+}
+
+/* write incoming bytes into pad and refresh viewport */
+void tui_write(const char *buf, int len)
+{
+    if (!pad_win) return;
+
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+    int vis = visible_rows();
+
+    /* write chunk using waddch (handles control chars) */
+    for (int i = 0; i < len; ++i) {
+        char c = buf[i];
+        /* Convert CRLF patterns so we don't create empty extra lines */
+        if (c == '\r') {
+            /* ignore standalone CR */
+            continue;
+        }
+        waddch(pad_win, c);
+    }
+
+    /* compute current pad cursor row */
+    int y, x;
+    getyx(pad_win, y, x);
+    if (y < 0) y = 0;
+    pad_row = y;
+
+    /* auto-scroll if user is at bottom (auto_scroll == 1) */
+    if (auto_scroll) {
+        if (pad_row >= vis) {
+            pad_pos = pad_row - vis + 1;
+            if (pad_pos < 0) pad_pos = 0;
+        } else {
+            pad_pos = 0;
+        }
+    } else {
+        /* if user had scrolled up, ensure pad_pos not beyond content */
+        if (pad_pos > pad_row) pad_pos = pad_row;
+    }
+
+    /* refresh pad viewport (top pad_pos -> show through rows-2,
+       status window occupies bottom row (rows-1) so last pad row to show is rows-2) */
+    int last_display_row = (rows >= 2) ? (rows - 2) : 0;
+    prefresh(pad_win, pad_pos, 0, 0, 0, last_display_row, cols - 1);
+}
+
+void tui_scroll(int direction)
+{
+    if (!pad_win) return;
+
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+    int vis = visible_rows();
+
+    /* user scrolled => disable auto-scroll */
+    auto_scroll = 0;
+
+    /* direction positive => scroll up (page up), negative => scroll down (page down) */
+    pad_pos += direction * 3;
+
+    if (pad_pos < 0) pad_pos = 0;
+    if (pad_pos > pad_row) pad_pos = pad_row;
+
+    int last_display_row = (rows >= 2) ? (rows - 2) : 0;
+    prefresh(pad_win, pad_pos, 0, 0, 0, last_display_row, cols - 1);
+}
+
+/* Update the reversed status bar at the bottom */
+void tui_update_status(TermConfig *cfg, int connected)
+{
+    if (!status_win) return;
+
+    werase(status_win);
+    wattron(status_win, A_REVERSE);
+
+    int cols = 80;
+    getmaxyx(status_win, cols, cols); /* harmless attempt to get width */
+
+    mvwprintw(status_win, 0, 0,
+              "%s | %d baud | [%s] | Ctrl+A = menu",
+              cfg->port,
+              cfg->baud,
+              connected ? "CONNECTED" : "DISCONNECTED");
+
+    wattroff(status_win, A_REVERSE);
+    wrefresh(status_win);
+}
+
+/* Called by main when the terminal resizes */
+void tui_resize(TermConfig *cfg, int connected)
+{
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+
+    if (status_win) {
+        wresize(status_win, 1, cols);
+        mvwin(status_win, rows - 1, 0);
+    }
+
+    /* Ensure visible area recalculated and pad repainted */
+    tui_update_status(cfg, connected);
+
+    /* Recompute last_display_row and repaint pad using existing pad_pos */
+    int last_display_row = (rows >= 2) ? (rows - 2) : 0;
+    prefresh(pad_win, pad_pos, 0, 0, 0, last_display_row, cols - 1);
 }

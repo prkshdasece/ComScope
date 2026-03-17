@@ -9,23 +9,25 @@ jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      
+
       - name: Build snap
         uses: snapcore/action-build@v1
         id: build
-        
-      - name: Publish snap to stable channel
+
+      - name: Publish to Snap Store
         uses: snapcore/action-publish@v1
         with:
           store_login: ${{ secrets.SNAPCRAFT_STORE_LOGIN }}
           snap: ${{ steps.build.outputs.snap }}
           release: stable
           
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v1
+        if: always()
         with:
           files: ${{ steps.build.outputs.snap }}
           draft: false

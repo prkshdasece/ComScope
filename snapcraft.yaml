@@ -1,0 +1,53 @@
+name: comscope
+base: core22
+version: '1.0.0'
+summary: Serial port terminal for embedded development boards on Linux
+description: |
+  ComScope is a lightweight, fast serial port terminal designed for embedded 
+  developers on Linux. It provides an intuitive ncurses-based interface for 
+  communicating with microcontrollers, Arduino boards, and other serial devices.
+  
+  Features:
+  - Ultra-low latency serial communication (30-50ms response time)
+  - Clean ncurses terminal UI with intuitive navigation
+  - Auto-port detection for available serial ports
+  - Session logging with timestamps
+  - Color support for various terminals
+  - Easy keyboard navigation
+  - Helpful error messages and diagnostics
+
+grade: stable
+confinement: strict
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+  - build-on: armhf
+
+apps:
+  comscope:
+    command: bin/comscope
+    plugs:
+      - serial-port
+      - hardware-observe
+    environment:
+      TERM: xterm-256color
+
+plugs:
+  serial-port:
+    interface: serial-port
+
+parts:
+  comscope:
+    plugin: make
+    source: .
+    build-packages:
+      - gcc
+      - make
+      - pkg-config
+      - libncurses-dev
+    stage-packages:
+      - libncurses6
+      - libtinfo6
+    organize:
+      ComScope: bin/comscope

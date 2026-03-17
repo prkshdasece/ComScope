@@ -1,3 +1,9 @@
+/*
+ * ComScope - Configuration Header
+ * Copyright (c) 2026 Prakash Das
+ * Licensed under MIT License
+ */
+
 #ifndef PORT_H
 #define PORT_H
 

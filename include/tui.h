@@ -1,3 +1,9 @@
+/*
+ * ComScope - Configuration Header
+ * Copyright (c) 2026 Prakash Das
+ * Licensed under MIT License
+ */
+
 #pragma once
 
 #include <ncurses.h>

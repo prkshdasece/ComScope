@@ -61,7 +61,14 @@ int scan_ports(char ports[][270], int max_ports)
             continue;
         close(fd);
 
-        strncpy(ports[count], path, 269);
+        /* Safely copy path to ports array with explicit size */
+        size_t path_len = strlen(path);
+        if (path_len < sizeof(ports[count])) {
+            strcpy(ports[count], path);  /* Safe because we checked length */
+        } else {
+            /* Path too long, skip this port */
+            continue;
+        }
         count++;
     }
     closedir(dir);

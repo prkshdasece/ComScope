@@ -79,10 +79,9 @@ int main(void)
     memset(&cfg, 0, sizeof(cfg));
     strncpy(cfg.port, port, sizeof(cfg.port) - 1);
 
-    /* Start logging automatically with auto-generated filename */
-    /* Empty string tells logger to use default ~/Documents/ComScope/ location */
+    /* Logging disabled by default */
     strncpy(cfg.log_path, "", sizeof(cfg.log_path) - 1);
-    cfg.log_enabled = 1;  /* Start with logging enabled by default */
+    cfg.log_enabled = 0;  /* Logging OFF by default */
 
     if (show_config(&cfg) < 0) { endwin(); printf("Cancelled.\n"); return 0; }
 
@@ -100,14 +99,6 @@ int main(void)
 
     g_connected = 1;
 
-    /* Start logging before running engine */
-    if (logger_start(cfg.log_path) == 0) {
-        /* Logging started successfully */
-    } else {
-        /* Log startup failed, but continue anyway */
-        cfg.log_enabled = 0;
-    }
-
     /* 4 — run the terminal */
     run_engine(fd, &cfg);
 
@@ -121,6 +112,15 @@ int main(void)
 
     endwin();
     printf("ComScope closed.\n");
-    printf("Session logs saved to: %s\n", logger_get_log_dir());
+    
+    const char *log_dir = logger_get_log_dir();
+    if (log_dir != NULL) {
+        if (cfg.log_enabled || logger_active()) {
+            printf("Session logs saved to: %s\n", log_dir);
+        } else {
+            printf("Log files are saved to: %s\n", log_dir);
+        }
+    }
+    
     return 0;
 }

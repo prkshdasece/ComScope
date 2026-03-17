@@ -49,11 +49,11 @@ static int ensure_log_directory(void)
     }
 
     /* Build path: ~/Documents/ComScope */
-    char log_dir[512];
+    char log_dir[1024];
     snprintf(log_dir, sizeof(log_dir), "%s/Documents/ComScope", home);
 
     /* Create Documents directory if needed */
-    char docs_dir[512];
+    char docs_dir[1024];
     snprintf(docs_dir, sizeof(docs_dir), "%s/Documents", home);
     mkdir(docs_dir, 0755);  /* Create if doesn't exist, ignore if already exists */
 
@@ -84,7 +84,7 @@ static int generate_log_filename(char *filename, size_t size)
     struct tm *t = localtime(&now);
 
     /* Format: ~/Documents/ComScope/ComScope_2026-03-17_14-23-45.txt */
-    snprintf(filename, size, 
+    int ret = snprintf(filename, size, 
              "%s/Documents/ComScope/ComScope_%04d-%02d-%02d_%02d-%02d-%02d.txt",
              home,
              t->tm_year + 1900,
@@ -93,6 +93,11 @@ static int generate_log_filename(char *filename, size_t size)
              t->tm_hour,
              t->tm_min,
              t->tm_sec);
+
+    if (ret < 0 || (size_t)ret >= size) {
+        fprintf(stderr, "Error: Log filename too long\n");
+        return -1;
+    }
 
     return 0;
 }
@@ -108,7 +113,7 @@ int logger_start(const char *path)
     }
 
     /* Generate timestamped filename */
-    char log_filename[512];
+    char log_filename[1024];
     if (generate_log_filename(log_filename, sizeof(log_filename)) < 0) {
         fprintf(stderr, "Warning: Could not generate log filename\n");
         return -1;
@@ -126,24 +131,24 @@ int logger_start(const char *path)
     /* Write session header with full path info */
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    char header[256];
-    snprintf(header, sizeof(header),
+    char header[512];
+    int header_len = snprintf(header, sizeof(header),
              "\n========================================\n"
              "ComScope Session Started\n"
              "Date: %04d-%02d-%02d\n"
              "Time: %02d:%02d:%02d\n"
-             "File: %s\n"
              "========================================\n\n",
              t->tm_year + 1900,
              t->tm_mon + 1,
              t->tm_mday,
              t->tm_hour,
              t->tm_min,
-             t->tm_sec,
-             log_filename);
+             t->tm_sec);
     
-    ssize_t written = write(log_fd, header, strlen(header));
-    (void)written;
+    if (header_len > 0 && (size_t)header_len < sizeof(header)) {
+        ssize_t written = write(log_fd, header, (size_t)header_len);
+        (void)written;
+    }
 
     /* Flush to ensure it's written */
     fsync(log_fd);
@@ -156,7 +161,7 @@ void logger_write(const char *buf, int n)
     if (log_fd < 0) return;
     
     /* Write data to log file */
-    ssize_t written = write(log_fd, buf, n);
+    ssize_t written = write(log_fd, buf, (size_t)n);
     (void)written;
     
     /* Flush periodically to ensure data is saved */
@@ -170,8 +175,8 @@ void logger_stop(void)
     /* Write session footer */
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    char footer[256];
-    snprintf(footer, sizeof(footer),
+    char footer[512];
+    int footer_len = snprintf(footer, sizeof(footer),
              "\n========================================\n"
              "ComScope Session Ended\n"
              "Date: %04d-%02d-%02d\n"
@@ -184,8 +189,10 @@ void logger_stop(void)
              t->tm_min,
              t->tm_sec);
     
-    ssize_t written = write(log_fd, footer, strlen(footer));
-    (void)written;
+    if (footer_len > 0 && (size_t)footer_len < sizeof(footer)) {
+        ssize_t written = write(log_fd, footer, (size_t)footer_len);
+        (void)written;
+    }
     
     /* Ensure all data is written before closing */
     fsync(log_fd);
@@ -204,7 +211,7 @@ const char *logger_get_log_dir(void)
     const char *home = getenv("HOME");
     if (!home) return NULL;
     
-    static char log_dir[512];
+    static char log_dir[1024];
     snprintf(log_dir, sizeof(log_dir), "%s/Documents/ComScope", home);
     return log_dir;
 }

@@ -47,17 +47,16 @@
  * ncurses but never recreates the status window or re-draws the pad, leaving
  * only the status bar visible (or a completely blank screen).
  */
-static TermConfig *g_cfg = NULL;
-static int g_connected = 0;
+static TermConfig *g_cfg       = NULL;
+static int         g_connected = 0;
 
 static void handle_resize(int sig)
 {
     (void)sig;
     endwin();
-    refresh(); /* re-enters curses mode; LINES and COLS are updated here */
+    refresh();   /* re-enters curses mode; LINES and COLS are updated here */
     clear();
-    if (g_cfg)
-    {
+    if (g_cfg) {
         tui_resize(g_cfg, g_connected);
     }
 }
@@ -73,35 +72,26 @@ int main(void)
 
     /* 1 — pick port */
     char *port = pick_port();
-    if (!port)
-    {
-        endwin();
-        printf("quit.\n");
-        return 0;
-    }
+    if (!port) { endwin(); printf("quit.\n"); return 0; }
 
     /* 2 — configure */
     TermConfig cfg;
     memset(&cfg, 0, sizeof(cfg));
     strncpy(cfg.port, port, sizeof(cfg.port) - 1);
 
-    strncpy(cfg.log_path, "session.txt", sizeof(cfg.log_path) - 1);
-    cfg.log_enabled = 0;
+    /* Start logging automatically with auto-generated filename */
+    /* Empty string tells logger to use default ~/Documents/ComScope/ location */
+    strncpy(cfg.log_path, "", sizeof(cfg.log_path) - 1);
+    cfg.log_enabled = 1;  /* Start with logging enabled by default */
 
-    if (show_config(&cfg) < 0)
-    {
-        endwin();
-        printf("Cancelled.\n");
-        return 0;
-    }
+    if (show_config(&cfg) < 0) { endwin(); printf("Cancelled.\n"); return 0; }
 
-    g_cfg = &cfg;
+    g_cfg       = &cfg;
     g_connected = 0;
 
     /* 3 — open serial port */
     int fd = open_serial(&cfg);
-    if (fd < 0)
-    {
+    if (fd < 0) {
         endwin();
         printf("Failed to open %s\n", cfg.port);
         printf("Tip: sudo usermod -aG dialout $USER\n");
@@ -110,6 +100,14 @@ int main(void)
 
     g_connected = 1;
 
+    /* Start logging before running engine */
+    if (logger_start(cfg.log_path) == 0) {
+        /* Logging started successfully */
+    } else {
+        /* Log startup failed, but continue anyway */
+        cfg.log_enabled = 0;
+    }
+
     /* 4 — run the terminal */
     run_engine(fd, &cfg);
 
@@ -117,12 +115,12 @@ int main(void)
     g_cfg = NULL;
     close_serial(fd);
 
-    if (logger_active())
-    {
+    if (logger_active()) {
         logger_stop();
     }
 
     endwin();
     printf("ComScope closed.\n");
+    printf("Session logs saved to: %s\n", logger_get_log_dir());
     return 0;
 }

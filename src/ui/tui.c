@@ -67,11 +67,10 @@ void tui_init(TermConfig *cfg)
     keypad(stdscr, TRUE);
     curs_set(0);
 
-    if (has_colors())
-    {
+    if (has_colors()) {
         start_color();
         use_default_colors();
-
+        
         init_pair(1, COLOR_WHITE, -1);
         init_pair(2, COLOR_GREEN, -1);
         init_pair(3, COLOR_CYAN, -1);
@@ -82,25 +81,22 @@ void tui_init(TermConfig *cfg)
 
     pad_win = newpad(PAD_ROWS, PAD_COLS);
     scrollok(pad_win, TRUE);
-
-    if (has_colors())
-    {
+    
+    if (has_colors()) {
         wattron(pad_win, COLOR_PAIR(1));
     }
 
     status_win = newwin(1, cols, rows - 1, 0);
     keypad(status_win, TRUE);
     wrefresh(status_win);
-
+    
     timeout(input_timeout);
 }
 
 void tui_destroy(void)
 {
-    if (status_win)
-        delwin(status_win);
-    if (pad_win)
-        delwin(pad_win);
+    if (status_win) delwin(status_win);
+    if (pad_win) delwin(pad_win);
     endwin();
 }
 
@@ -111,23 +107,19 @@ int tui_get_char(void)
 
 void tui_write(const char *buf, int len)
 {
-    if (!pad_win)
-        return;
+    if (!pad_win) return;
 
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
     int vis = visible_rows();
 
-    if (has_colors())
-    {
+    if (has_colors()) {
         wattron(pad_win, COLOR_PAIR(1));
     }
 
-    for (int i = 0; i < len; ++i)
-    {
+    for (int i = 0; i < len; ++i) {
         char c = buf[i];
-        if (c == '\r')
-        {
+        if (c == '\r') {
             continue;
         }
         waddch(pad_win, c);
@@ -136,27 +128,18 @@ void tui_write(const char *buf, int len)
     int y, x;
     getyx(pad_win, y, x);
     (void)x;
-    if (y < 0)
-        y = 0;
+    if (y < 0) y = 0;
     pad_row = y;
 
-    if (auto_scroll)
-    {
-        if (pad_row >= vis)
-        {
+    if (auto_scroll) {
+        if (pad_row >= vis) {
             pad_pos = pad_row - vis + 1;
-            if (pad_pos < 0)
-                pad_pos = 0;
-        }
-        else
-        {
+            if (pad_pos < 0) pad_pos = 0;
+        } else {
             pad_pos = 0;
         }
-    }
-    else
-    {
-        if (pad_pos > pad_row)
-            pad_pos = pad_row;
+    } else {
+        if (pad_pos > pad_row) pad_pos = pad_row;
     }
 
     int last_display_row = (rows >= 2) ? (rows - 2) : 0;
@@ -165,8 +148,7 @@ void tui_write(const char *buf, int len)
 
 void tui_scroll(int direction)
 {
-    if (!pad_win)
-        return;
+    if (!pad_win) return;
 
     int rows = getmaxy(stdscr);
 
@@ -174,10 +156,8 @@ void tui_scroll(int direction)
 
     pad_pos += direction * 3;
 
-    if (pad_pos < 0)
-        pad_pos = 0;
-    if (pad_pos > pad_row)
-        pad_pos = pad_row;
+    if (pad_pos < 0) pad_pos = 0;
+    if (pad_pos > pad_row) pad_pos = pad_row;
 
     int last_display_row = (rows >= 2) ? (rows - 2) : 0;
     prefresh(pad_win, pad_pos, 0, 0, 0, last_display_row, COLS - 1);
@@ -190,13 +170,12 @@ void tui_update_status(TermConfig *cfg, int connected)
     werase(status_win);
     wattron(status_win, A_REVERSE);
 
-    /* Display: PORT | BAUD | CONNECTION_STATUS | LOG_STATUS | MENU_HINT */
     mvwprintw(status_win, 0, 0,
               "%s | %d baud | [%s] %s | Ctrl+A = menu",
               cfg->port,
               cfg->baud,
               connected ? "CONNECTED" : "DISCONNECTED",
-              cfg->log_enabled ? "| [LOG]" : "");
+              cfg->log_enabled ? "| [LOGGING]" : "");
 
     wattroff(status_win, A_REVERSE);
     wrefresh(status_win);
@@ -207,8 +186,7 @@ void tui_resize(TermConfig *cfg, int connected)
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
 
-    if (status_win)
-    {
+    if (status_win) {
         wresize(status_win, 1, cols);
         mvwin(status_win, rows - 1, 0);
     }

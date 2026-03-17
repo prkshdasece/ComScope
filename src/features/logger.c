@@ -33,54 +33,161 @@
 #include <time.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include "logger.h"
 
 static int log_fd = -1;
 
-int logger_start(const char *path)
+/* Create logs directory if it doesn't exist */
+static int ensure_log_directory(void)
 {
-    log_fd = open(path,
-                  O_WRONLY | O_CREAT | O_APPEND,
-                  0644);
-    if (log_fd < 0)
+    const char *home = getenv("HOME");
+    if (!home) {
+        fprintf(stderr, "Error: HOME environment variable not set\n");
         return -1;
+    }
 
-    /* write timestamp header */
+    /* Build path: ~/Documents/ComScope */
+    char log_dir[512];
+    snprintf(log_dir, sizeof(log_dir), "%s/Documents/ComScope", home);
+
+    /* Create Documents directory if needed */
+    char docs_dir[512];
+    snprintf(docs_dir, sizeof(docs_dir), "%s/Documents", home);
+    mkdir(docs_dir, 0755);  /* Create if doesn't exist, ignore if already exists */
+
+    /* Create ComScope directory */
+    if (mkdir(log_dir, 0755) < 0) {
+        /* Directory might already exist, which is fine */
+        /* Check if it's actually a directory */
+        struct stat st;
+        if (stat(log_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            fprintf(stderr, "Error: Cannot create log directory: %s\n", log_dir);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* Generate timestamped log filename */
+static int generate_log_filename(char *filename, size_t size)
+{
+    const char *home = getenv("HOME");
+    if (!home) {
+        fprintf(stderr, "Error: HOME environment variable not set\n");
+        return -1;
+    }
+
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    char header[64];
-    strftime(header, sizeof(header),
-             "\n--- Session started %Y-%m-%d %H:%M:%S ---\n", t);
-    write(log_fd, header, strlen(header));
+
+    /* Format: ~/Documents/ComScope/ComScope_2026-03-17_14-23-45.txt */
+    snprintf(filename, size, 
+             "%s/Documents/ComScope/ComScope_%04d-%02d-%02d_%02d-%02d-%02d.txt",
+             home,
+             t->tm_year + 1900,
+             t->tm_mon + 1,
+             t->tm_mday,
+             t->tm_hour,
+             t->tm_min,
+             t->tm_sec);
+
+    return 0;
+}
+
+int logger_start(const char *path)
+{
+    (void)path;  /* Ignore the passed path, use auto-generated one */
+
+    /* Ensure log directory exists */
+    if (ensure_log_directory() < 0) {
+        fprintf(stderr, "Warning: Could not create log directory\n");
+        return -1;
+    }
+
+    /* Generate timestamped filename */
+    char log_filename[512];
+    if (generate_log_filename(log_filename, sizeof(log_filename)) < 0) {
+        fprintf(stderr, "Warning: Could not generate log filename\n");
+        return -1;
+    }
+
+    /* Open log file (create if doesn't exist, append if it does) */
+    log_fd = open(log_filename,
+                  O_WRONLY | O_CREAT | O_APPEND,
+                  0644);
+    if (log_fd < 0) {
+        fprintf(stderr, "Warning: Could not open log file: %s\n", log_filename);
+        return -1;
+    }
+
+    /* Write session header with full path info */
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char header[256];
+    snprintf(header, sizeof(header),
+             "\n========================================\n"
+             "ComScope Session Started\n"
+             "Date: %04d-%02d-%02d\n"
+             "Time: %02d:%02d:%02d\n"
+             "File: %s\n"
+             "========================================\n\n",
+             t->tm_year + 1900,
+             t->tm_mon + 1,
+             t->tm_mday,
+             t->tm_hour,
+             t->tm_min,
+             t->tm_sec,
+             log_filename);
+    
+    ssize_t written = write(log_fd, header, strlen(header));
+    (void)written;
+
+    /* Flush to ensure it's written */
+    fsync(log_fd);
+
     return 0;
 }
 
 void logger_write(const char *buf, int n)
 {
-    if (log_fd < 0)
-        return;
-
+    if (log_fd < 0) return;
+    
+    /* Write data to log file */
     ssize_t written = write(log_fd, buf, n);
-    (void)written; /* Avoid unused variable warning */
-
-    /* Flush data regularly to ensure it's written to disk */
+    (void)written;
+    
+    /* Flush periodically to ensure data is saved */
     fsync(log_fd);
 }
 
 void logger_stop(void)
 {
-    if (log_fd < 0)
-        return;
+    if (log_fd < 0) return;
 
-    /* write closing footer */
+    /* Write session footer */
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    char footer[64];
-    strftime(footer, sizeof(footer),
-             "--- Session ended   %Y-%m-%d %H:%M:%S ---\n", t);
-    write(log_fd, footer, strlen(footer));
-
-    /* FIX: Ensure data is synced before closing */
+    char footer[256];
+    snprintf(footer, sizeof(footer),
+             "\n========================================\n"
+             "ComScope Session Ended\n"
+             "Date: %04d-%02d-%02d\n"
+             "Time: %02d:%02d:%02d\n"
+             "========================================\n\n",
+             t->tm_year + 1900,
+             t->tm_mon + 1,
+             t->tm_mday,
+             t->tm_hour,
+             t->tm_min,
+             t->tm_sec);
+    
+    ssize_t written = write(log_fd, footer, strlen(footer));
+    (void)written;
+    
+    /* Ensure all data is written before closing */
     fsync(log_fd);
     close(log_fd);
     log_fd = -1;
@@ -88,5 +195,16 @@ void logger_stop(void)
 
 int logger_active(void)
 {
-    return log_fd >= 0; /* FIX: Corrected logic */
+    return log_fd >= 0;
+}
+
+/* Get the current log directory path */
+const char *logger_get_log_dir(void)
+{
+    const char *home = getenv("HOME");
+    if (!home) return NULL;
+    
+    static char log_dir[512];
+    snprintf(log_dir, sizeof(log_dir), "%s/Documents/ComScope", home);
+    return log_dir;
 }

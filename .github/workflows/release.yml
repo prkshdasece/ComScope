@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
+      
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,21 +20,19 @@ jobs:
       - name: Build snap
         uses: snapcore/action-build@v1
         id: build
-        with:
-          snapcraft-channel: 8.x/stable
 
       - name: Publish to Snap Store
         uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_LOGIN }}
         with:
-          store_login: ${{ secrets.SNAPCRAFT_STORE_LOGIN }}
           snap: ${{ steps.build.outputs.snap }}
           release: stable
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           files: ${{ steps.build.outputs.snap }}
           draft: false
           prerelease: false

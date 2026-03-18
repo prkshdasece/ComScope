@@ -8,10 +8,9 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    # Add comprehensive permissions for all operations
     permissions:
       contents: write
-      repository-projects: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,6 +20,8 @@ jobs:
       - name: Build snap
         uses: snapcore/action-build@v1
         id: build
+        with:
+          snapcraft-channel: 8.x/stable
 
       - name: Publish to Snap Store
         uses: snapcore/action-publish@v1
@@ -28,11 +29,12 @@ jobs:
           store_login: ${{ secrets.SNAPCRAFT_STORE_LOGIN }}
           snap: ${{ steps.build.outputs.snap }}
           release: stable
-          
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         if: success()
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: ${{ steps.build.outputs.snap }}
           draft: false
           prerelease: false

@@ -26,11 +26,6 @@ source-code: https://github.com/prkshdas/ComScope
 
 website: https://github.com/prkshdas/ComScope
 
-architectures:
-  - build-on: amd64
-  - build-on: arm64
-  - build-on: armhf
-
 apps:
   comscope:
     command: bin/comscope

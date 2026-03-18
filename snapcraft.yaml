@@ -19,6 +19,13 @@ description: |
 grade: stable
 confinement: strict
 
+issues:
+  - https://github.com/prkshdas/ComScope/issues
+
+source-code: https://github.com/prkshdas/ComScope
+
+website: https://github.com/prkshdas/ComScope
+
 architectures:
   - build-on: amd64
   - build-on: arm64
@@ -50,6 +57,11 @@ parts:
       - libncurses6
       - libtinfo6
     override-build: |
+      make clean
       make
       mkdir -p $SNAPCRAFT_PART_INSTALL/bin
+      if [ ! -f ComScope ]; then
+        echo "ERROR: ComScope executable not found after build"
+        exit 1
+      fi
       install -m 755 ComScope $SNAPCRAFT_PART_INSTALL/bin/comscope

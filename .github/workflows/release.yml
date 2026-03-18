@@ -8,9 +8,10 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    # Add permissions so the GitHub release step can write to the repo
+    # Add comprehensive permissions for all operations
     permissions:
       contents: write
+      repository-projects: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,8 +31,9 @@ jobs:
           
       - name: Create Release
         uses: softprops/action-gh-release@v2
-        if: always()
+        if: success()
         with:
           files: ${{ steps.build.outputs.snap }}
           draft: false
           prerelease: false
+          generate_release_notes: true

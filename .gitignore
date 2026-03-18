@@ -28,8 +28,8 @@
 *.so.*
 *.dylib
 
-# Executables
-*ComScope
+# Executables - ONLY the binary at root, not source files
+/ComScope
 *.exe
 *.out
 *.app
@@ -55,5 +55,7 @@ dkms.conf
 # debug information files
 *.dwo
 
-#others
-*.txt
+# Build and distribution artifacts
+build/
+dist/
+*.snap

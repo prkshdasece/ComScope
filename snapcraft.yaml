@@ -17,7 +17,7 @@ description: |
   - Helpful error messages and diagnostics
 
 grade: stable
-confinement: strict
+confinement: classic
 
 issues:
   - https://github.com/prkshdas/ComScope/issues

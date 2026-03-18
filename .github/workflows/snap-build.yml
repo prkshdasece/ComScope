@@ -10,14 +10,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Build snap
         uses: snapcore/action-build@v1
         id: build
 
       - name: Upload snap
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: comscope-snap
           path: ${{ steps.build.outputs.snap }}

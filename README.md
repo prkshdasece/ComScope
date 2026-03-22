@@ -12,7 +12,7 @@ ComScope is a modern ncurses-based serial terminal designed for embedded develop
 
 - **⚡ Ultra-Fast**: 30-50ms response time with minimal latency
 - **🎨 Clean Interface**: Intuitive ncurses-based terminal UI with smart navigation
-- **🔌 Auto-Detection**: Automatically discovers available serial ports
+- **🔌 Smart Port Detection**: Discovers ports on startup and automatically refreshes when devices are connected or disconnected
 - **📝 Session Logging**: Record all communications with precise timestamps
 - **🌈 Terminal Compatible**: Works seamlessly across different terminal emulators
 - **⌨️ Keyboard Optimized**: Comprehensive shortcuts for power users

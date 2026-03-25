@@ -1,21 +1,21 @@
 /*
  * ComScope - Serial Port Terminal for Embedded Development
  * Copyright (c) 2026 Prakash Das
- * 
+ *
  * This file is part of ComScope.
  * ComScope is free software: you can redistribute it and/or modify
  * it under the terms of the MIT License.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -47,16 +47,17 @@
  * ncurses but never recreates the status window or re-draws the pad, leaving
  * only the status bar visible (or a completely blank screen).
  */
-static TermConfig *g_cfg       = NULL;
-static int         g_connected = 0;
+static TermConfig *g_cfg = NULL;
+static int g_connected = 0;
 
 static void handle_resize(int sig)
 {
     (void)sig;
     endwin();
-    refresh();   /* re-enters curses mode; LINES and COLS are updated here */
+    refresh(); /* re-enters curses mode; LINES and COLS are updated here */
     clear();
-    if (g_cfg) {
+    if (g_cfg)
+    {
         tui_resize(g_cfg, g_connected);
     }
 }
@@ -70,57 +71,87 @@ int main(void)
     keypad(stdscr, TRUE);
     curs_set(0);
 
-    /* 1 — pick port */
-    char *port = pick_port();
-    if (!port) { endwin(); printf("quit.\n"); return 0; }
+    char *port = NULL;
+    int config_done = 0;
 
-    /* 2 — configure */
-    TermConfig cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    strncpy(cfg.port, port, sizeof(cfg.port) - 1);
+    /* Main navigation loop: allows going back from config to port picker */
+    while (!config_done)
+    {
+        /* 1 — pick port */
+        port = pick_port();
+        if (!port)
+        {
+            endwin();
+            printf("quit.\n");
+            return 0; /* User pressed q at port picker — exit application */
+        }
 
-    /* Logging disabled by default */
-    strncpy(cfg.log_path, "", sizeof(cfg.log_path) - 1);
-    cfg.log_enabled = 0;  /* Logging OFF by default */
+        /* 2 — configure */
+        TermConfig cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        strncpy(cfg.port, port, sizeof(cfg.port) - 1);
 
-    if (show_config(&cfg) < 0) { endwin(); printf("Cancelled.\n"); return 0; }
+        /* Logging disabled by default */
+        strncpy(cfg.log_path, "", sizeof(cfg.log_path) - 1);
+        cfg.log_enabled = 0; /* Logging OFF by default */
 
-    g_cfg       = &cfg;
-    g_connected = 0;
+        int config_result = show_config(&cfg);
 
-    /* 3 — open serial port */
-    int fd = open_serial(&cfg);
-    if (fd < 0) {
-        endwin();
-        printf("Failed to open %s\n", cfg.port);
-        printf("Tip: sudo usermod -aG dialout $USER\n");
-        return 1;
-    }
+        if (config_result == 0)
+        {
+            /* Configuration successful, proceed to open serial port */
+            config_done = 1;
 
-    g_connected = 1;
+            g_cfg = &cfg;
+            g_connected = 0;
 
-    /* 4 — run the terminal */
-    run_engine(fd, &cfg);
+            /* 3 — open serial port */
+            int fd = open_serial(&cfg);
+            if (fd < 0)
+            {
+                endwin();
+                printf("Failed to open %s\n", cfg.port);
+                printf("Tip: sudo usermod -aG dialout $USER\n");
+                return 1;
+            }
 
-    /* 5 — clean up */
-    g_cfg = NULL;
-    close_serial(fd);
+            g_connected = 1;
 
-    if (logger_active()) {
-        logger_stop();
-    }
+            /* 4 — run the terminal */
+            run_engine(fd, &cfg);
 
-    endwin();
-    printf("ComScope closed.\n");
-    
-    const char *log_dir = logger_get_log_dir();
-    if (log_dir != NULL) {
-        if (cfg.log_enabled || logger_active()) {
-            printf("Session logs saved to: %s\n", log_dir);
-        } else {
-            printf("Log files are saved to: %s\n", log_dir);
+            /* 5 — clean up */
+            g_cfg = NULL;
+            close_serial(fd);
+
+            if (logger_active())
+            {
+                logger_stop();
+            }
+
+            endwin();
+            printf("ComScope closed.\n");
+
+            const char *log_dir = logger_get_log_dir();
+            if (log_dir != NULL)
+            {
+                if (cfg.log_enabled || logger_active())
+                {
+                    printf("Session logs saved to: %s\n", log_dir);
+                }
+                else
+                {
+                    printf("Log files are saved to: %s\n", log_dir);
+                }
+            }
+        }
+        else if (config_result < 0)
+        {
+            /* User pressed q to go back — loop continues and returns to port picker */
+            /* No action needed; the while loop will run again */
+            continue;
         }
     }
-    
+
     return 0;
 }

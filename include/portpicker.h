@@ -7,6 +7,8 @@
 #ifndef PORTPICKER_H
 #define PORTPICKER_H
 
+#define PORT_PICKER_QUIT NULL
+#define PORT_PICKER_SELECT (char *)1 /* non-NULL, selected port */
 /* Shows the port picker UI.
    Returns the selected port path (e.g. "/dev/ttyUSB0")
    or NULL if the user pressed q to quit. */

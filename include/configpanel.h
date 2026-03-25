@@ -7,6 +7,9 @@
 #ifndef CONFIGPANEL_H
 #define CONFIGPANEL_H
 
+#define CONFIG_BACK -1
+#define CONFIG_CONNECT 0
+
 #include "config.h"
 
 /*config panel UI*/

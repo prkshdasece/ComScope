@@ -1,6 +1,6 @@
 # 🖥️ ComScope
 
-> **A lightweight, fast serial port terminal for embedded development boards on Linux**
+> **A lightweight, fast serial port terminal for embedded development boards on Linux** 
 
 ComScope is a modern ncurses-based serial terminal designed for embedded developers. It provides an intuitive interface for communicating with microcontrollers, Arduino boards, and other serial devices with ultra-low latency and zero artifacts.
 

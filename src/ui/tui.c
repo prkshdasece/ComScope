@@ -170,10 +170,13 @@ void tui_update_status(TermConfig *cfg, int connected)
     werase(status_win);
     wattron(status_win, A_REVERSE);
 
+     /* Baud rate lookup table */
+    int baud_rates[] = {9600, 19200, 38400, 57600, 115200, 230400};
+
     mvwprintw(status_win, 0, 0,
               "%s | %d baud | [%s] %s | Ctrl+A = menu",
               cfg->port,
-              cfg->baud,
+              baud_rates[cfg->baud_index],
               connected ? "CONNECTED" : "DISCONNECTED",
               cfg->log_enabled ? "| [LOGGING]" : "");
 

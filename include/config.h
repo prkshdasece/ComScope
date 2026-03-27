@@ -13,6 +13,7 @@ typedef struct
 {
     char port[270]; /*/dev/ttyXYZ*/
     speed_t baud;   /*baudrate*/
+    int baud_index;  /*index for baud*/
     int databits;   /*5,6,7 or 8*/
     int parity;     /*0=none, 1=odd, 2=even*/
     int stopbits;

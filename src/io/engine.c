@@ -87,6 +87,7 @@ void run_engine(int serial_fd, TermConfig *cfg)
 
     struct pollfd fds[2];
     char buf[BUF_SIZE];
+    int hex_mode = 0;
 
     fds[0].fd = STDIN_FILENO;
     fds[0].events = POLLIN;
@@ -136,6 +137,11 @@ void run_engine(int serial_fd, TermConfig *cfg)
             {
                 break;
             }
+	    else if (ch == 'h' || ch == 'H')
+	    {
+		// Toggle between raw and hex display modes
+	    	hex_mode = !hex_mode;
+	    }
             else if (ch > 0 && ch != ERR)
             {
                 if (isprint(ch) || ch == '\n' || ch == '\r' || ch == '\t' || ch == 0x08)

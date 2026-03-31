@@ -186,18 +186,18 @@ void run_engine(int serial_fd, TermConfig *cfg)
 		    char hex_buf[BUF_SIZE * 4];
 		    format_hex(buf, (int)n, hex_buf, sizeof(hex_buf));
 
-		    tui_write(hex_buf, strlen(hex_buf));
+		    int hex_len = (int)strlen(hex_buf);
+
+		    tui_write(hex_buf, hex_len);
 
 		    if (cfg->log_enabled)
-		    {
-			logger_write(hex_buf, strlen(hex_buf));
-		    }
+		        logger_write(hex_buf, hex_len);
 		}
 		else
 		{
                     tui_write(buf, (int)n);
                     if (cfg->log_enabled)
-                       logger_write(buf, (int)n);
+                        logger_write(buf, (int)n);
 		}
             }
             else if (n == 0)

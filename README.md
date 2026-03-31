@@ -401,7 +401,7 @@ make dist
 
 - [ ] Configurable serial parameters (data bits, parity, stop bits)
 - [ ] Multiple session tabs for side-by-side monitoring
-- [ ] Hex/ASCII view modes for binary data
+- [ ] Hex/ASCII view modes for binary data (Implemented)
 - [ ] Search and filter functionality
 - [ ] Macro/script support for automation
 - [ ] Auto-baud rate detection

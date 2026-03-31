@@ -181,9 +181,24 @@ void run_engine(int serial_fd, TermConfig *cfg)
             ssize_t n = read(serial_fd, buf, sizeof(buf));
             if (n > 0)
             {
-                tui_write(buf, (int)n);
-                if (cfg->log_enabled)
-                    logger_write(buf, (int)n);
+		if (hex_mode)
+		{
+		    char hex_buf[BUF_SIZE * 4];
+		    format_hex(buf, (int)n, hex_buf, sizeof(hex_buf));
+
+		    tui_write(hex_buf, strlen(hex_buf));
+
+		    if (cfg->log_enabled)
+		    {
+			logger_write(hex_buf, strlen(hex_buf));
+		    }
+		}
+		else
+		{
+                    tui_write(buf, (int)n);
+                    if (cfg->log_enabled)
+                       logger_write(buf, (int)n);
+		}
             }
             else if (n == 0)
             {

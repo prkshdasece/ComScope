@@ -79,6 +79,23 @@ static void handle_command_mode(TermConfig *cfg, int serial_fd)
     tui_update_status(cfg, 1);
 }
 
+static void format_hex(const char *in, int len, char *out, int out_size)
+{
+    int pos = 0;
+
+    for (int i = 0; i < len && pos < out_size - 4; i++)
+    {
+	 pos += snprintf(out + pos, out_size - pos, "%02X ", (unsigned char)in[i]);
+    }
+
+    if (pos < out_size - 1)
+    {
+	 out[pos++] = '\n';
+    }
+
+    out[pos] = '\0';
+}
+
 void run_engine(int serial_fd, TermConfig *cfg)
 {
     tui_init(cfg);
@@ -87,6 +104,7 @@ void run_engine(int serial_fd, TermConfig *cfg)
 
     struct pollfd fds[2];
     char buf[BUF_SIZE];
+    int hex_mode = 0;
 
     fds[0].fd = STDIN_FILENO;
     fds[0].events = POLLIN;
@@ -136,6 +154,11 @@ void run_engine(int serial_fd, TermConfig *cfg)
             {
                 break;
             }
+	    else if (ch == 'h' || ch == 'H')
+	    {
+		// Toggle between raw and hex display modes
+	    	hex_mode = !hex_mode;
+	    }
             else if (ch > 0 && ch != ERR)
             {
                 if (isprint(ch) || ch == '\n' || ch == '\r' || ch == '\t' || ch == 0x08)
@@ -158,9 +181,24 @@ void run_engine(int serial_fd, TermConfig *cfg)
             ssize_t n = read(serial_fd, buf, sizeof(buf));
             if (n > 0)
             {
-                tui_write(buf, (int)n);
-                if (cfg->log_enabled)
-                    logger_write(buf, (int)n);
+		if (hex_mode)
+		{
+		    char hex_buf[BUF_SIZE * 4];
+		    format_hex(buf, (int)n, hex_buf, sizeof(hex_buf));
+
+		    int hex_len = (int)strlen(hex_buf);
+
+		    tui_write(hex_buf, hex_len);
+
+		    if (cfg->log_enabled)
+		        logger_write(hex_buf, hex_len);
+		}
+		else
+		{
+                    tui_write(buf, (int)n);
+                    if (cfg->log_enabled)
+                        logger_write(buf, (int)n);
+		}
             }
             else if (n == 0)
             {

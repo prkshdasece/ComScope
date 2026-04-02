@@ -30,18 +30,38 @@
 
 #include <ncurses.h>
 #include <string.h>
+#include <stdlib.h>
+#include <time.h>
 #include "tui.h"
 
-#define PAD_ROWS 20000
-#define PAD_COLS 1024
+#define SCROLLBACK_LINES 1000   // Reduced from 20000 to 1000 (saves memory, faster)
+#define LINE_LENGTH 512         // Max chars per line
 
-WINDOW *pad_win;
-WINDOW *status_win;
+WINDOW *status_win = NULL;
 
-static int pad_row = 0;
-static int pad_pos = 0;
+/* Circular scrollback buffer */
+typedef struct {
+    char **lines;           // Array of line buffers
+    int head;               // Index of newest line
+    int count;              // Number of valid lines (0 to SCROLLBACK_LINES)
+    int cols;               // Terminal columns
+    int current_line_pos;   // Current cursor position in current line
+} Scrollback;
+
+static Scrollback sb = {0};
 static int auto_scroll = 1;
+static int scroll_offset = 0;   // For Page Up/Down scrolling
 static int input_timeout = 50;
+static struct timespec last_refresh = {0, 0};
+static int pad_dirty = 0;
+
+/* Throttle display to ~60Hz (16ms) */
+#define REFRESH_INTERVAL_NS (16 * 1000000LL)
+
+static inline long long timespec_diff_ns(struct timespec *a, struct timespec *b)
+{
+    return (a->tv_sec - b->tv_sec) * 1000000000LL + (a->tv_nsec - b->tv_nsec);
+}
 
 static int visible_rows(void)
 {
@@ -60,40 +80,48 @@ void tui_set_timeout(int timeout_ms)
 void tui_init(TermConfig *cfg)
 {
     (void)cfg;
-
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
 
-    pad_win = newpad(PAD_ROWS, PAD_COLS);
-    scrollok(pad_win, TRUE);
-
-    if (has_colors()) {
-        start_color();
-        use_default_colors();
-        
-        init_pair(1, COLOR_WHITE, -1);
-        init_pair(2, COLOR_GREEN, -1);
-        init_pair(3, COLOR_CYAN, -1);
-
-        wattron(pad_win, COLOR_PAIR(1));
+    /* Allocate circular scrollback buffer */
+    sb.lines = calloc(SCROLLBACK_LINES, sizeof(char *));
+    for (int i = 0; i < SCROLLBACK_LINES; i++) {
+        sb.lines[i] = calloc(1, LINE_LENGTH);
+        sb.lines[i][0] = '\0';
     }
+    sb.head = 0;
+    sb.count = 0;
+    sb.cols = cols;
+    sb.current_line_pos = 0;
+    scroll_offset = 0;
 
     status_win = newwin(1, cols, rows - 1, 0);
     keypad(status_win, TRUE);
 
- /* Initialize display with first refresh */
-    int last_display_row = (rows >= 2) ? (rows - 2) : 0;
-    prefresh(pad_win, 0, 0, 0, 0, last_display_row, cols - 1);
-
-    wrefresh(status_win);
-    
+    clock_gettime(CLOCK_MONOTONIC, &last_refresh);
     timeout(input_timeout);
+    
+    /* Initial draw */
+    clear();
+    refresh();
+    tui_update_status(cfg, 1);
 }
 
 void tui_destroy(void)
 {
-    if (status_win) delwin(status_win);
-    if (pad_win) delwin(pad_win);
+    if (status_win) {
+        delwin(status_win);
+        status_win = NULL;
+    }
+    
+    /* Free scrollback buffer */
+    if (sb.lines) {
+        for (int i = 0; i < SCROLLBACK_LINES; i++) {
+            free(sb.lines[i]);
+        }
+        free(sb.lines);
+        sb.lines = NULL;
+    }
 }
 
 int tui_get_char(void)
@@ -101,80 +129,154 @@ int tui_get_char(void)
     return getch();
 }
 
+/* Internal: Ensure current line exists and append char */
+static void append_to_line(char c)
+{
+    char *line = sb.lines[sb.head];
+    
+    if (sb.current_line_pos < sb.cols - 1 && sb.current_line_pos < LINE_LENGTH - 1) {
+        line[sb.current_line_pos++] = c;
+        line[sb.current_line_pos] = '\0';
+    }
+}
+
+/* Internal: Advance to new line (circular) */
+static void advance_line(void)
+{
+    sb.head = (sb.head + 1) % SCROLLBACK_LINES;
+    sb.current_line_pos = 0;
+    sb.lines[sb.head][0] = '\0';
+    
+    if (sb.count < SCROLLBACK_LINES) {
+        sb.count++;
+    }
+    
+    /* If auto-scrolling, adjust offset */
+    if (auto_scroll) {
+        scroll_offset = 0;
+    }
+}
+
 void tui_write(const char *buf, int len)
 {
-    if (!pad_win) return;
+    if (len <= 0 || !sb.lines) return;
 
+    for (int i = 0; i < len; i++) {
+        char c = buf[i];
+        
+        if (c == '\r') {
+            continue;  // Ignore CR
+        } else if (c == '\n') {
+            advance_line();
+        } else if (c == '\b' || c == 0x7F) {
+            // Backspace
+            if (sb.current_line_pos > 0) {
+                sb.current_line_pos--;
+                sb.lines[sb.head][sb.current_line_pos] = '\0';
+            }
+        } else if (c >= 32 && c < 127) {
+            // Printable ASCII
+            append_to_line(c);
+        }
+        // Ignore non-printable control chars
+    }
+    
+    pad_dirty = 1;
+    
+    /* Throttle screen refresh to ~60Hz */
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    if (timespec_diff_ns(&now, &last_refresh) > REFRESH_INTERVAL_NS) {
+        tui_refresh();
+    }
+}
+
+/* Force screen redraw */
+void tui_refresh(void)
+{
+    if (!pad_dirty || !sb.lines) return;
+    
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
-    int vis = visible_rows();
-
-    if (has_colors()) {
-        wattron(pad_win, COLOR_PAIR(1));
-    }
-
-    for (int i = 0; i < len; ++i) {
-        char c = buf[i];
-        if (c == '\r') {
-            continue;
+    int display_rows = rows - 1;  // Reserve bottom row for status
+    
+    clear();
+    
+    int start_line;
+    if (auto_scroll || scroll_offset == 0) {
+        /* Show newest lines at bottom */
+        start_line = (sb.head - (display_rows - 1) + SCROLLBACK_LINES) % SCROLLBACK_LINES;
+        if (sb.count < display_rows) {
+            start_line = 0;
         }
-        waddch(pad_win, c);
-    }
-
-    int y, x;
-    getyx(pad_win, y, x);
-    (void)x;
-    if (y < 0) y = 0;
-    pad_row = y;
-
-    if (auto_scroll) {
-        if (pad_row >= vis) {
-            pad_pos = pad_row - vis + 1;
-            if (pad_pos < 0) pad_pos = 0;
-        } else {
-            pad_pos = 0;
-        }
+        scroll_offset = 0;
     } else {
-        if (pad_pos > pad_row) pad_pos = pad_row;
+        /* Scrolling mode */
+        start_line = (sb.head - (display_rows - 1) - scroll_offset + SCROLLBACK_LINES * 2) % SCROLLBACK_LINES;
     }
-
-    int last_display_row = (rows >= 2) ? (rows - 2) : 0;
-    prefresh(pad_win, pad_pos, 0, 0, 0, last_display_row, cols - 1);
+    
+    for (int row = 0; row < display_rows; row++) {
+        int line_idx = (start_line + row) % SCROLLBACK_LINES;
+        
+        // Only draw if this line has valid data
+        if (row < sb.count || sb.count == SCROLLBACK_LINES) {
+            mvprintw(row, 0, "%s", sb.lines[line_idx]);
+        }
+    }
+    
+    refresh();
+    pad_dirty = 0;
+    
+    clock_gettime(CLOCK_MONOTONIC, &last_refresh);
 }
 
 void tui_scroll(int direction)
 {
-    if (!pad_win) return;
-
+    auto_scroll = 0;  // Disable auto-scroll when user scrolls
+    
     int rows = getmaxy(stdscr);
-
-    auto_scroll = 0;
-
-    pad_pos += direction * 3;
-
-    if (pad_pos < 0) pad_pos = 0;
-    if (pad_pos > pad_row) pad_pos = pad_row;
-
-    int last_display_row = (rows >= 2) ? (rows - 2) : 0;
-    prefresh(pad_win, pad_pos, 0, 0, 0, last_display_row, COLS - 1);
+    int page_size = rows / 2;  // Half page scroll
+    
+    if (direction > 0) {  // Page Up (scroll back)
+        scroll_offset += page_size;
+        if (scroll_offset > sb.count - (rows - 1)) {
+            scroll_offset = sb.count - (rows - 1);
+        }
+        if (scroll_offset < 0) scroll_offset = 0;
+    } else {  // Page Down (scroll forward)
+        scroll_offset -= page_size;
+        if (scroll_offset <= 0) {
+            scroll_offset = 0;
+            auto_scroll = 1;  // Re-enable auto-scroll at bottom
+        }
+    }
+    
+    tui_refresh();
+    tui_update_status(NULL, 1);  // Refresh status to show scroll position
 }
 
 void tui_update_status(TermConfig *cfg, int connected)
 {
-    if (!status_win) return;
+    if (!status_win || !cfg) return;
 
     werase(status_win);
     wattron(status_win, A_REVERSE);
 
-     /* Baud rate lookup table */
     int baud_rates[] = {9600, 19200, 38400, 57600, 115200, 230400};
+    
+    const char *scroll_indicator = "";
+    if (!auto_scroll) {
+        scroll_indicator = "| [SCROLLING] ";
+    }
 
     mvwprintw(status_win, 0, 0,
-              "%s | %d baud | [%s] %s | Ctrl+A = menu",
+              "%s | %d baud | [%s] %s %s| Ctrl+A = menu",
               cfg->port,
               baud_rates[cfg->baud_index],
               connected ? "CONNECTED" : "DISCONNECTED",
-              cfg->log_enabled ? "| [LOGGING]" : "");
+              cfg->log_enabled ? "| [LOGGING] " : "",
+              scroll_indicator);
 
     wattroff(status_win, A_REVERSE);
     wrefresh(status_win);
@@ -189,9 +291,9 @@ void tui_resize(TermConfig *cfg, int connected)
         wresize(status_win, 1, cols);
         mvwin(status_win, rows - 1, 0);
     }
+    
+    sb.cols = cols;
 
     tui_update_status(cfg, connected);
-
-    int last_display_row = (rows >= 2) ? (rows - 2) : 0;
-    prefresh(pad_win, pad_pos, 0, 0, 0, last_display_row, cols - 1);
+    tui_refresh();
 }

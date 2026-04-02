@@ -37,7 +37,14 @@
 #include <sys/stat.h>
 #include "logger.h"
 
+#define LOG_BUFFER_SIZE 4096  // 4KB buffer
+#define FSYNC_INTERVAL_SEC 1  // Sync to disk every 1 second
+
 static int log_fd = -1;
+static char log_buffer[LOG_BUFFER_SIZE];
+static int log_buffer_used = 0;
+static struct timespec last_fsync = {0, 0};
+static char current_log_path[1024] = {0};
 
 /* Create logs directory if it doesn't exist */
 static int ensure_log_directory(void)
@@ -48,19 +55,14 @@ static int ensure_log_directory(void)
         return -1;
     }
 
-    /* Build path: ~/Documents/ComScope */
     char log_dir[1024];
     snprintf(log_dir, sizeof(log_dir), "%s/Documents/ComScope", home);
 
-    /* Create Documents directory if needed */
     char docs_dir[1024];
     snprintf(docs_dir, sizeof(docs_dir), "%s/Documents", home);
-    mkdir(docs_dir, 0755);  /* Create if doesn't exist, ignore if already exists */
+    mkdir(docs_dir, 0755);
 
-    /* Create ComScope directory */
     if (mkdir(log_dir, 0755) < 0) {
-        /* Directory might already exist, which is fine */
-        /* Check if it's actually a directory */
         struct stat st;
         if (stat(log_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
             fprintf(stderr, "Error: Cannot create log directory: %s\n", log_dir);
@@ -83,7 +85,6 @@ static int generate_log_filename(char *filename, size_t size)
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
 
-    /* Format: ~/Documents/ComScope/ComScope_2026-03-17_14-23-45.txt */
     int ret = snprintf(filename, size, 
              "%s/Documents/ComScope/ComScope_%04d-%02d-%02d_%02d-%02d-%02d.txt",
              home,
@@ -102,33 +103,44 @@ static int generate_log_filename(char *filename, size_t size)
     return 0;
 }
 
+/* Flush buffer to disk (internal use) */
+static void flush_log_buffer(void)
+{
+    if (log_buffer_used > 0 && log_fd >= 0) {
+        ssize_t written = write(log_fd, log_buffer, log_buffer_used);
+        (void)written; // Best effort
+        log_buffer_used = 0;
+    }
+}
+
 int logger_start(const char *path)
 {
-    (void)path;  /* Ignore the passed path, use auto-generated one */
+    (void)path;  // Ignore passed path, use auto-generated
 
-    /* Ensure log directory exists */
+    /* Reset state */
+    log_buffer_used = 0;
+    clock_gettime(CLOCK_MONOTONIC, &last_fsync);
+
     if (ensure_log_directory() < 0) {
         fprintf(stderr, "Warning: Could not create log directory\n");
         return -1;
     }
 
-    /* Generate timestamped filename */
     char log_filename[1024];
     if (generate_log_filename(log_filename, sizeof(log_filename)) < 0) {
         fprintf(stderr, "Warning: Could not generate log filename\n");
         return -1;
     }
 
-    /* Open log file (create if doesn't exist, append if it does) */
-    log_fd = open(log_filename,
-                  O_WRONLY | O_CREAT | O_APPEND,
-                  0644);
+    strncpy(current_log_path, log_filename, sizeof(current_log_path) - 1);
+
+    log_fd = open(log_filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (log_fd < 0) {
         fprintf(stderr, "Warning: Could not open log file: %s\n", log_filename);
         return -1;
     }
 
-    /* Write session header with full path info */
+    /* Write session header */
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     char header[512];
@@ -146,31 +158,54 @@ int logger_start(const char *path)
              t->tm_sec);
     
     if (header_len > 0 && (size_t)header_len < sizeof(header)) {
-        ssize_t written = write(log_fd, header, (size_t)header_len);
-        (void)written;
+        write(log_fd, header, (size_t)header_len);
     }
 
-    /* Flush to ensure it's written */
+    /* Initial fsync for header */
     fsync(log_fd);
+    clock_gettime(CLOCK_MONOTONIC, &last_fsync);
 
     return 0;
 }
 
 void logger_write(const char *buf, int n)
 {
-    if (log_fd < 0) return;
+    if (log_fd < 0 || n <= 0) return;
     
-    /* Write data to log file */
-    ssize_t written = write(log_fd, buf, (size_t)n);
-    (void)written;
+    /* If data is larger than buffer, flush existing and write directly */
+    if (n > (int)(LOG_BUFFER_SIZE - log_buffer_used)) {
+        flush_log_buffer();
+        
+        if (n > LOG_BUFFER_SIZE) {
+            /* Large write, bypass buffer */
+            write(log_fd, buf, n);
+        } else {
+            memcpy(log_buffer + log_buffer_used, buf, n);
+            log_buffer_used += n;
+        }
+    } else {
+        /* Buffer the data */
+        memcpy(log_buffer + log_buffer_used, buf, n);
+        log_buffer_used += n;
+    }
     
-    /* Flush periodically to ensure data is saved */
-    fsync(log_fd);
+    /* Periodic fsync (every FSYNC_INTERVAL_SEC seconds) */
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    if (now.tv_sec > last_fsync.tv_sec + FSYNC_INTERVAL_SEC) {
+        flush_log_buffer();
+        fsync(log_fd);
+        last_fsync = now;
+    }
 }
 
 void logger_stop(void)
 {
     if (log_fd < 0) return;
+
+    /* Flush remaining buffer */
+    flush_log_buffer();
 
     /* Write session footer */
     time_t now = time(NULL);
@@ -190,14 +225,13 @@ void logger_stop(void)
              t->tm_sec);
     
     if (footer_len > 0 && (size_t)footer_len < sizeof(footer)) {
-        ssize_t written = write(log_fd, footer, (size_t)footer_len);
-        (void)written;
+        write(log_fd, footer, (size_t)footer_len);
     }
     
-    /* Ensure all data is written before closing */
-    fsync(log_fd);
+    fsync(log_fd);  // Final sync
     close(log_fd);
     log_fd = -1;
+    log_buffer_used = 0;
 }
 
 int logger_active(void)
@@ -205,7 +239,6 @@ int logger_active(void)
     return log_fd >= 0;
 }
 
-/* Get the current log directory path */
 const char *logger_get_log_dir(void)
 {
     const char *home = getenv("HOME");

@@ -34,49 +34,62 @@
 #include <errno.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <time.h>
+#include <fcntl.h>
 #include "engine.h"
 #include "tui.h"
 #include "config.h"
 #include "logger.h"
+#include "ring_buffer.h"
 
-#define BUF_SIZE 512
-#define CMD_ESCAPE 0x01
+#define RING_BUF_SIZE (128 * 1024)      // 128KB ring buffer (power of 2)
+#define SERIAL_OUT_BUF_SIZE 1024        // 1KB output buffer
+#define MAX_READ_PER_CYCLE 4096         // Max 4KB per poll cycle
+#define DISPLAY_BATCH_SIZE 2048         // Batch display writes
+#define BUF_SIZE 512                    // For hex mode formatting
 
-static void handle_command_mode(TermConfig *cfg, int serial_fd)
+static ring_buff_t g_ring_buf;
+static uint8_t g_ring_buffer_storage[RING_BUF_SIZE];
+static char g_serial_out_buf[SERIAL_OUT_BUF_SIZE];
+static int g_serial_out_len = 0;
+static uint8_t g_display_batch[DISPLAY_BATCH_SIZE];
+static int g_display_batch_len = 0;
+static struct timespec last_display_update = {0, 0};
+
+#define CMD_ESCAPE 0x01  // Ctrl+A
+
+static inline long long timespec_diff_ms(struct timespec *a, struct timespec *b)
 {
-    (void)serial_fd;
+    return (a->tv_sec - b->tv_sec) * 1000LL + (a->tv_nsec - b->tv_nsec) / 1000000LL;
+}
 
-    tui_update_status(cfg, 1);
-
-    mvwprintw(status_win, 0, 1, "CMD: l=toggle log   q=quit   Esc=cancel");
-    wrefresh(status_win);
-
-    tui_set_timeout(1000);
-
-    int ch = tui_get_char();
-
-    tui_set_timeout(50);
-
-    if (ch == 'l' || ch == 'L')
-    {
-        if (!logger_active())
-        {
-            if (logger_start(cfg->log_path) == 0)
-                cfg->log_enabled = 1;
-        }
-        else
-        {
-            logger_stop();
-            cfg->log_enabled = 0;
-        }
+static int flush_serial_output(int fd)
+{
+    if (g_serial_out_len == 0) return 0;
+    
+    ssize_t written = write(fd, g_serial_out_buf, g_serial_out_len);
+    
+    if (written < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+        return -1;
     }
-    else if (ch == 'q' || ch == 'Q' || ch == 27)
-    {
-        ungetch('q');
-        return;
+    
+    if ((size_t)written < (size_t)g_serial_out_len) {
+        memmove(g_serial_out_buf, g_serial_out_buf + written, g_serial_out_len - written);
+        g_serial_out_len -= (int)written;
+    } else {
+        g_serial_out_len = 0;
     }
+    
+    return (int)written;
+}
 
-    tui_update_status(cfg, 1);
+static void queue_serial_output(int fd, char c)
+{
+    if (g_serial_out_len < SERIAL_OUT_BUF_SIZE) {
+        g_serial_out_buf[g_serial_out_len++] = c;
+    }
+    flush_serial_output(fd);
 }
 
 static void format_hex(const char *in, int len, char *out, int out_size)
@@ -85,141 +98,229 @@ static void format_hex(const char *in, int len, char *out, int out_size)
 
     for (int i = 0; i < len && pos < out_size - 4; i++)
     {
-	 pos += snprintf(out + pos, out_size - pos, "%02X ", (unsigned char)in[i]);
+        pos += snprintf(out + pos, out_size - pos, "%02X ", (unsigned char)in[i]);
     }
 
     if (pos < out_size - 1)
     {
-	 out[pos++] = '\n';
+        out[pos++] = '\n';
     }
 
     out[pos] = '\0';
 }
 
-void run_engine(int serial_fd, TermConfig *cfg)
+static void process_serial_input(int serial_fd, int hex_mode)
 {
-    tui_init(cfg);
-    tui_set_timeout(50);
-    tui_update_status(cfg, 1);
-
-    struct pollfd fds[2];
-    char buf[BUF_SIZE];
-    int hex_mode = 0;
-
-    fds[0].fd = STDIN_FILENO;
-    fds[0].events = POLLIN;
-
-    fds[1].fd = serial_fd;
-    fds[1].events = POLLIN | POLLERR | POLLHUP;
-
-    while (1)
-    {
-        int ret = poll(fds, 2, 30);
-        if (ret < 0)
-        {
-            if (errno == EINTR)
-                continue;
-            perror("poll");
-            break;
+    uint8_t *write_ptr;
+    size_t available;
+    ssize_t n;
+    int total_read = 0;
+    
+    // Drain kernel buffer using zero-copy ring buffer interface
+    while (total_read < MAX_READ_PER_CYCLE) {
+        available = ring_buff_get_write_ptr(&g_ring_buf, &write_ptr);
+        if (available == 0) break;  // Ring buffer full
+        
+        size_t to_read = available;
+        if (to_read > (size_t)(MAX_READ_PER_CYCLE - total_read)) {
+            to_read = (size_t)(MAX_READ_PER_CYCLE - total_read);
         }
-
-        if (ret == 0)
-        {
-            continue;
-        }
-
-        if (fds[0].revents & POLLIN)
-        {
-            int ch = tui_get_char();
-
-            if (ch == CMD_ESCAPE)
-            {
-                handle_command_mode(cfg, serial_fd);
-
-                int next = tui_get_char();
-                if (next == 'q' || next == 'Q')
-                    break;
-                if (next != ERR)
-                    ungetch(next);
+        
+        n = read(serial_fd, write_ptr, to_read);
+        
+        if (n > 0) {
+            ring_buff_advance_write(&g_ring_buf, (size_t)n);
+            total_read += (int)n;
+            
+            if (logger_active() && !hex_mode) {
+                logger_write((const char *)write_ptr, (int)n);
             }
-            else if (ch == KEY_PPAGE)
-            {
-                tui_scroll(1);
-            }
-            else if (ch == KEY_NPAGE)
-            {
-                tui_scroll(-1);
-            }
-            else if (ch == 'q' || ch == 'Q')
-            {
-                break;
-            }
-	    else if (ch == 'h' || ch == 'H')
-	    {
-		// Toggle between raw and hex display modes
-	    	hex_mode = !hex_mode;
-	    }
-            else if (ch > 0 && ch != ERR)
-            {
-                if (isprint(ch) || ch == '\n' || ch == '\r' || ch == '\t' || ch == 0x08)
-                {
-                    char c = (char)ch;
-                    ssize_t w = write(serial_fd, &c, 1);
-                    if (w < 0)
-                    {
-                        if (errno != EAGAIN && errno != EWOULDBLOCK)
-                        {
-                            perror("serial write failed");
-                        }
-                    }
-                }
-            }
-        }
-
-        if (fds[1].revents & POLLIN)
-        {
-            ssize_t n = read(serial_fd, buf, sizeof(buf));
-            if (n > 0)
-            {
-		if (hex_mode)
-		{
-		    char hex_buf[BUF_SIZE * 4];
-		    format_hex(buf, (int)n, hex_buf, sizeof(hex_buf));
-
-		    int hex_len = (int)strlen(hex_buf);
-
-		    tui_write(hex_buf, hex_len);
-
-		    if (cfg->log_enabled)
-		        logger_write(hex_buf, hex_len);
-		}
-		else
-		{
-                    tui_write(buf, (int)n);
-                    if (cfg->log_enabled)
-                        logger_write(buf, (int)n);
-		}
-            }
-            else if (n == 0)
-            {
-                tui_update_status(cfg, 0);
-                break;
-            }
-            else
-            {
-                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
-                    continue;
-                perror("serial read failed");
-                break;
-            }
-        }
-
-        if (fds[1].revents & (POLLHUP | POLLERR))
-        {
-            tui_update_status(cfg, 0);
+        } else if (n == 0) {
+            break;  // EOF
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            if (errno == EINTR) continue;
+            perror("serial read");
             break;
         }
     }
+}
 
+static void flush_display_batch(TermConfig *cfg, int hex_mode)
+{
+    if (g_display_batch_len > 0) {
+        if (hex_mode) {
+            // In hex mode, format the batch before display
+            char hex_buf[DISPLAY_BATCH_SIZE * 4];
+            format_hex((const char *)g_display_batch, g_display_batch_len, hex_buf, sizeof(hex_buf));
+            int hex_len = (int)strlen(hex_buf);
+            tui_write(hex_buf, hex_len);
+            if (cfg->log_enabled) {
+                logger_write(hex_buf, hex_len);
+            }
+        } else {
+            tui_write((const char *)g_display_batch, g_display_batch_len);
+        }
+        g_display_batch_len = 0;
+    }
+    
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    if (timespec_diff_ms(&now, &last_display_update) > 16) {  // 60Hz throttle
+        tui_refresh();
+        last_display_update = now;
+    }
+}
+
+static void drain_ring_buffer(TermConfig *cfg, int hex_mode)
+{
+    uint8_t *read_ptr;
+    size_t contiguous;
+    
+    while ((contiguous = ring_buff_get_read_ptr(&g_ring_buf, &read_ptr)) > 0) {
+        // Copy to display batch
+        size_t to_copy = contiguous;
+        if (to_copy > (size_t)(DISPLAY_BATCH_SIZE - g_display_batch_len)) {
+            to_copy = (size_t)(DISPLAY_BATCH_SIZE - g_display_batch_len);
+        }
+        
+        memcpy(g_display_batch + g_display_batch_len, read_ptr, to_copy);
+        g_display_batch_len += (int)to_copy;
+        ring_buff_advance_read(&g_ring_buf, to_copy);
+        
+        if (g_display_batch_len >= DISPLAY_BATCH_SIZE / 2) {
+            flush_display_batch(cfg, hex_mode);
+        }
+    }
+    
+    flush_display_batch(cfg, hex_mode);
+}
+
+static void handle_command_mode(TermConfig *cfg, int serial_fd)
+{
+    (void)serial_fd;
+    
+    tui_update_status(cfg, 1);
+    mvwprintw(status_win, 0, 1, "CMD: l=toggle log   q=quit   Esc=cancel");
+    wrefresh(status_win);
+    
+    tui_set_timeout(1000);
+    int ch = tui_get_char();
+    tui_set_timeout(50);
+    
+    if (ch == 'l' || ch == 'L') {
+        if (!logger_active()) {
+            if (logger_start(cfg->log_path) == 0) cfg->log_enabled = 1;
+        } else {
+            logger_stop();
+            cfg->log_enabled = 0;
+        }
+    } else if (ch == 'q' || ch == 'Q' || ch == 27) {
+        ungetch('q');
+    }
+    
+    tui_update_status(cfg, 1);
+}
+
+void run_engine(int serial_fd, TermConfig *cfg)
+{
+    if (!ring_buff_init(&g_ring_buf, g_ring_buffer_storage, RING_BUF_SIZE)) {
+        fprintf(stderr, "Failed to initialize ring buffer\n");
+        return;
+    }
+    
+    g_serial_out_len = 0;
+    g_display_batch_len = 0;
+    clock_gettime(CLOCK_MONOTONIC, &last_display_update);
+    
+    tui_init(cfg);
+    tui_set_timeout(50);
+    tui_update_status(cfg, 1);
+    
+    struct pollfd fds[2];
+    fds[0].fd = STDIN_FILENO;
+    fds[0].events = POLLIN;
+    fds[1].fd = serial_fd;
+    fds[1].events = POLLIN | POLLERR | POLLHUP;
+    
+    int running = 1;
+    int hex_mode = 0;  // Hex display mode toggle
+    
+    while (running) {
+        if (g_serial_out_len > 0) {
+            fds[1].events |= POLLOUT;
+        } else {
+            fds[1].events &= ~POLLOUT;
+        }
+        
+        int ret = poll(fds, 2, 16);  // 16ms timeout for ~60Hz
+        
+        if (ret < 0) {
+            if (errno == EINTR) continue;
+            perror("poll");
+            break;
+        }
+        
+        // Keyboard input
+        if (fds[0].revents & POLLIN) {
+            int ch = tui_get_char();
+            
+            if (ch == CMD_ESCAPE) {
+                handle_command_mode(cfg, serial_fd);
+                int next = tui_get_char();
+                if (next == 'q' || next == 'Q') running = 0;
+                if (next != ERR) ungetch(next);
+            } else if (ch == KEY_PPAGE) {
+                tui_scroll(1);
+            } else if (ch == KEY_NPAGE) {
+                tui_scroll(-1);
+            } else if (ch == 'q' || ch == 'Q') {
+                running = 0;
+            } else if (ch == 'h' || ch == 'H') {
+                // Toggle between raw and hex display modes
+                hex_mode = !hex_mode;
+            } else if (ch > 0 && ch != ERR) {
+                if (isprint(ch) || ch == '\n' || ch == '\r' || ch == '\t' || ch == 0x08) {
+                    queue_serial_output(serial_fd, (char)ch);
+                }
+            }
+        }
+        
+        // Serial output (non-blocking)
+        if (fds[1].revents & POLLOUT) {
+            if (flush_serial_output(serial_fd) < 0) {
+                perror("serial write");
+                running = 0;
+            }
+        }
+        
+        // Serial input (drain to ring buffer)
+        if (fds[1].revents & POLLIN) {
+            process_serial_input(serial_fd, hex_mode);
+        }
+        
+        // Serial errors
+        if (fds[1].revents & (POLLHUP | POLLERR)) {
+            tui_update_status(cfg, 0);
+            break;
+        }
+        
+        // Drain ring buffer to display (throttled internally)
+        drain_ring_buffer(cfg, hex_mode);
+        
+        // Periodic display update
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (timespec_diff_ms(&now, &last_display_update) > 16) {
+            tui_refresh();
+            last_display_update = now;
+        }
+    }
+    
+    // Final flush
+    drain_ring_buffer(cfg, hex_mode);
+    tui_refresh();
+    
     tui_destroy();
 }

@@ -63,6 +63,7 @@ static inline long long timespec_diff_ns(struct timespec *a, struct timespec *b)
     return (a->tv_sec - b->tv_sec) * 1000000000LL + (a->tv_nsec - b->tv_nsec);
 }
 
+static int visible_rows(void) __attribute__((unused));  // avoid compilation warning
 static int visible_rows(void)
 {
     int rows, cols;
@@ -200,6 +201,7 @@ void tui_refresh(void)
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
     int display_rows = rows - 1;  // Reserve bottom row for status
+    (void)cols;  // Suppress unused warning
     
     clear();
     

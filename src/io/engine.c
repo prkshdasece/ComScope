@@ -56,7 +56,15 @@ static uint8_t g_display_batch[DISPLAY_BATCH_SIZE];
 static int g_display_batch_len = 0;
 static struct timespec last_display_update = {0, 0};
 
+static int g_paused = 0;  // Pause state: 0 = running, 1 = paused
+
 #define CMD_ESCAPE 0x01  // Ctrl+A
+
+/* Toggle pause/resume state - can be called from main loop */
+static void toggle_pause(void)
+{
+    g_paused = !g_paused;
+}
 
 static inline long long timespec_diff_ms(struct timespec *a, struct timespec *b)
 {
@@ -132,7 +140,7 @@ static void process_serial_input(int serial_fd, int hex_mode)
             ring_buff_advance_write(&g_ring_buf, (size_t)n);
             total_read += (int)n;
             
-            if (logger_active() && !hex_mode) {
+            if (logger_active() && !hex_mode && !g_paused) {
                 logger_write((const char *)write_ptr, (int)n);
             }
         } else if (n == 0) {
@@ -148,6 +156,9 @@ static void process_serial_input(int serial_fd, int hex_mode)
 
 static void flush_display_batch(TermConfig *cfg, int hex_mode)
 {
+    // Skip flushing if paused - don't write to display or log
+    if (g_paused) return;
+
     if (g_display_batch_len > 0) {
         if (hex_mode) {
             // In hex mode, format the batch before display
@@ -175,6 +186,9 @@ static void flush_display_batch(TermConfig *cfg, int hex_mode)
 
 static void drain_ring_buffer(TermConfig *cfg, int hex_mode)
 {
+    // Skip draining if paused - data stays in ring buffer
+    if (g_paused) return;
+
     uint8_t *read_ptr;
     size_t contiguous;
     
@@ -202,7 +216,7 @@ static void handle_command_mode(TermConfig *cfg, int serial_fd)
     (void)serial_fd;
     
     tui_update_status(cfg, 1);
-    mvwprintw(status_win, 0, 1, "CMD: l=toggle log   q=quit   Esc=cancel");
+    mvwprintw(status_win, 0, 1, "CMD: l=toggle log   q=quit   p=pause/resume   Esc=cancel");
     wrefresh(status_win);
     
     tui_set_timeout(1000);
@@ -216,6 +230,9 @@ static void handle_command_mode(TermConfig *cfg, int serial_fd)
             logger_stop();
             cfg->log_enabled = 0;
         }
+    } else if (ch == 'p' || ch == 'P') {
+        // Toggle pause state
+        g_paused = !g_paused;
     } else if (ch == 'q' || ch == 'Q' || ch == 27) {
         ungetch('q');
     }
@@ -232,6 +249,7 @@ void run_engine(int serial_fd, TermConfig *cfg)
     
     g_serial_out_len = 0;
     g_display_batch_len = 0;
+    g_paused = 0;  // Start in running state
     clock_gettime(CLOCK_MONOTONIC, &last_display_update);
     
     tui_init(cfg);
@@ -280,11 +298,15 @@ void run_engine(int serial_fd, TermConfig *cfg)
             } else if (ch == 'h' || ch == 'H') {
                 // Toggle between raw and hex display modes
                 hex_mode = !hex_mode;
+            } else if (ch == 'p' || ch == 'P') {
+                // Toggle pause/resume
+                toggle_pause();
+                tui_update_status(cfg, 1);  // Update status to show PAUSED state
             } else if (ch > 0 && ch != ERR) {
                 if (isprint(ch) || ch == '\n' || ch == '\r' || ch == '\t' || ch == 0x08) {
                     queue_serial_output(serial_fd, (char)ch);
                 }
-            }
+            } 
         }
         
         // Serial output (non-blocking)
@@ -309,12 +331,14 @@ void run_engine(int serial_fd, TermConfig *cfg)
         // Drain ring buffer to display (throttled internally)
         drain_ring_buffer(cfg, hex_mode);
         
-        // Periodic display update
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (timespec_diff_ms(&now, &last_display_update) > 16) {
-            tui_refresh();
-            last_display_update = now;
+        // Periodic display update - also respect pause state
+        if (!g_paused) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if (timespec_diff_ms(&now, &last_display_update) > 16) {
+                tui_refresh();
+                last_display_update = now;
+            }
         }
     }
     

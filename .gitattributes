@@ -1,0 +1,3 @@
+snapcraft.yaml export-ignore
+.github/workflows/release.yaml export-ignore
+.github/workflows/snap-build.yaml export-ignore

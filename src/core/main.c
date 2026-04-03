@@ -183,7 +183,7 @@ int main(void)
                 }
                 else
                 {
-                    printf("Log files are saved to: %s\n", log_dir);
+                    printf("Thanks for using - ComScope\n");
                 }
             }
         }
